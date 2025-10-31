@@ -4,6 +4,7 @@ import socket
 from datetime import datetime, timezone
 import threading
 import queue
+import whois
 
 from gui import GUI
 def check_ssl_status(domain_name, result_queue):
@@ -70,9 +71,22 @@ def check_ssl_status(domain_name, result_queue):
 
     result_queue.put(result)
 
+def get_whois_info(domain_name, result_queue):
+    """
+    Fetches whois information for a domain.
+    This method is run in a separate thread and puts the result in a queue.
+    """
+    try:
+        w = whois.whois(domain_name)
+        result = {"domain": domain_name, "status": "WHOIS_SUCCESS", "data": w.text}
+    except Exception as e:
+        result = {"domain": domain_name, "status": "WHOIS_ERROR", "data": f"Could not retrieve whois info for '{domain_name}':\n{e}"}
+    result_queue.put(result)
+
 def main(stdscr):
     """The main function to run the TUI application."""
-    ui = GUI(stdscr, check_ssl_status)
+    checker_functions = {'ssl': check_ssl_status, 'whois': get_whois_info}
+    ui = GUI(stdscr, checker_functions)
     ui.run()
         
 if __name__ == "__main__":
