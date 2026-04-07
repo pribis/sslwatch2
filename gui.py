@@ -86,7 +86,10 @@ class GUI:
         lines_per_block = 7 if self.detailed_view else 2
         page_size = self._page_size()
         total_pages = max(1, (len(self.results_list) + page_size - 1) // page_size)
-        current_page = min(total_pages, (self.scroll_pos // page_size) + 1)
+        if self.scroll_pos + page_size >= len(self.results_list):
+            current_page = total_pages
+        else:
+            current_page = self.scroll_pos // page_size + 1
 
         title_attr = curses.A_BOLD if self.focus == 'RESULTS' else curses.A_NORMAL
         if total_pages > 1:
