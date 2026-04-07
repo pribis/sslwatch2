@@ -4,7 +4,8 @@ import socket
 from datetime import datetime, timezone
 import threading
 import queue
-import whois
+import subprocess
+import certifi
 
 from gui import GUI
 def check_ssl_status(domain_name, result_queue):
@@ -13,7 +14,7 @@ def check_ssl_status(domain_name, result_queue):
     This method is run in a separate thread and puts the result in a queue.
     """
     try:
-        context = ssl.create_default_context()
+        context = ssl.create_default_context(cafile=certifi.where())
         with socket.create_connection((domain_name, 443), timeout=5) as sock:
             with context.wrap_socket(sock, server_hostname=domain_name) as ssock:
                 cert = ssock.getpeercert()
@@ -77,8 +78,11 @@ def get_whois_info(domain_name, result_queue):
     This method is run in a separate thread and puts the result in a queue.
     """
     try:
-        w = whois.whois(domain_name)
-        result = {"domain": domain_name, "status": "WHOIS_SUCCESS", "data": w.text}
+        output = subprocess.run(
+            ["whois", domain_name],
+            capture_output=True, text=True, timeout=15
+        )
+        result = {"domain": domain_name, "status": "WHOIS_SUCCESS", "data": output.stdout or output.stderr}
     except Exception as e:
         result = {"domain": domain_name, "status": "WHOIS_ERROR", "data": f"Could not retrieve whois info for '{domain_name}':\n{e}"}
     result_queue.put(result)

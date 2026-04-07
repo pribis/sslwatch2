@@ -19,6 +19,7 @@ class GUI:
         self.app_mode = 'DOMAIN_INPUT'
         self.domain_input_str = ""
         self.popup_active = False
+        self.current_result_index = None  # Index of the most recently completed single-domain check
 
     def _setup_curses(self):
         curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
@@ -59,7 +60,7 @@ class GUI:
             win.noutrefresh()
             return
 
-        lines_per_block = 7 if self.detailed_view else 1
+        lines_per_block = 7 if self.detailed_view else 2
         page_size = max(1, (h - 2) // lines_per_block)
         total_pages = max(1, (len(self.results_list) + page_size - 1) // page_size) if page_size > 0 else 1
         current_page = min(total_pages, (self.scroll_pos // page_size) + 1)
@@ -70,34 +71,43 @@ class GUI:
             win.addstr(0, 2, f" Results: {len(self.results_list)} ")
 
         current_display_line = 1
-        for result in self.results_list[self.scroll_pos:]:
+        for list_idx, result in enumerate(self.results_list[self.scroll_pos:], start=self.scroll_pos):
             if current_display_line + lines_per_block > h - 1:
                 break
 
             status = result.get("status", "ERROR")
             color = self.colors.get(status, curses.color_pair(0))
+            is_current = self.current_result_index is None or list_idx == self.current_result_index
+            dim = curses.A_NORMAL if is_current else curses.A_DIM
 
-            if status in ["INFO", "ERROR", "UNKNOWN"]:
-                lines_needed = 2
-                if current_display_line + lines_needed > h - 1: break
-                win.addstr(current_display_line, 2, f"Domain: {result.get('domain', 'N/A')}", color)
-                win.addstr(current_display_line + 1, 2, result.get("message"))
-                current_display_line += lines_needed
+            if status == "INFO":
+                if current_display_line + 1 > h - 1: break
+                win.addstr(current_display_line, 2, result.get("message", ""), color | dim)
+                current_display_line += 1
+            elif status in ["ERROR", "UNKNOWN"]:
+                if current_display_line + 2 > h - 1: break
+                win.addstr(current_display_line, 2, f"Domain: {result.get('domain', 'N/A')}", color | dim)
+                win.addstr(current_display_line + 1, 2, result.get("message", ""), dim)
+                current_display_line += 2
             elif self.detailed_view:
-                win.addstr(current_display_line, 2, f"Domain:     {result.get('domain', 'N/A')}")
-                win.addstr(current_display_line + 1, 2, f"Subject:    {result.get('subject_cn', 'N/A')}")
-                win.addstr(current_display_line + 2, 2, f"Issuer:     {result.get('issuer_cn', 'N/A')}")
-                win.addstr(current_display_line + 3, 2, f"Issued:     {result.get('issued_on', 'N/A')}")
-                win.addstr(current_display_line + 4, 2, f"Expires:    {result.get('expires_on', 'N/A')} ({result.get('days_left', 'N/A')} days)")
-                win.addstr(current_display_line + 5, 2, "Status:     ")
-                win.addstr(current_display_line + 5, 14, result.get('status', 'N/A'), color | curses.A_BOLD)
+                win.addstr(current_display_line, 2, f"Domain:     {result.get('domain', 'N/A')}", dim)
+                win.addstr(current_display_line + 1, 2, f"Subject:    {result.get('subject_cn', 'N/A')}", dim)
+                win.addstr(current_display_line + 2, 2, f"Issuer:     {result.get('issuer_cn', 'N/A')}", dim)
+                win.addstr(current_display_line + 3, 2, f"Issued:     {result.get('issued_on', 'N/A')}", dim)
+                win.addstr(current_display_line + 4, 2, f"Expires:    {result.get('expires_on', 'N/A')} ({result.get('days_left', 'N/A')} days)", dim)
+                win.addstr(current_display_line + 5, 2, "Status:     ", dim)
+                win.addstr(current_display_line + 5, 14, result.get('status', 'N/A'), color | curses.A_BOLD | dim)
                 current_display_line += lines_per_block
             else: # Compact view
                 domain_str = result.get('domain', 'N/A')
                 status_str = result.get('status', 'N/A')
                 display_str = f"{domain_str} "
-                win.addstr(current_display_line, 2, display_str)
-                win.addstr(current_display_line, 2 + len(display_str), status_str, color | curses.A_BOLD)
+                win.addstr(current_display_line, 2, display_str, dim)
+                win.addstr(current_display_line, 2 + len(display_str), status_str, color | curses.A_BOLD | dim)
+                issued = result.get('issued_on', 'N/A')
+                expires = result.get('expires_on', 'N/A')
+                days = result.get('days_left', 'N/A')
+                win.addstr(current_display_line + 1, 4, f"Issued: {issued}  Expires: {expires} ({days} days)", dim)
                 current_display_line += lines_per_block
         win.noutrefresh()
 
@@ -162,13 +172,13 @@ class GUI:
                 self._display_help_popup()
                 redraw = True # Redraw main screen after popup closes
             elif key_pressed == curses.KEY_LEFT:
-                lines_per_block = 7 if self.detailed_view else 1
+                lines_per_block = 7 if self.detailed_view else 2
                 page_size = max(1, (self.output_win.getmaxyx()[0] - 2) // lines_per_block)
                 if self.scroll_pos > 0:
                     self.scroll_pos = max(0, self.scroll_pos - page_size)
                     redraw = True
             elif key_pressed == curses.KEY_RIGHT:
-                lines_per_block = 7 if self.detailed_view else 1
+                lines_per_block = 7 if self.detailed_view else 2
                 page_size = max(1, (self.output_win.getmaxyx()[0] - 2) // lines_per_block)
                 if self.scroll_pos + page_size < len(self.results_list):
                     self.scroll_pos += page_size
@@ -181,7 +191,8 @@ class GUI:
                     input_str = self.domain_input_str.strip()
                     if self.app_mode == 'DOMAIN_INPUT':
                         self.is_checking = True
-                        self.results_list = [{"status": "INFO", "message": f"Please wait, checking SSL cert for '{input_str}'..."}]
+                        self.results_list.insert(0, {"domain": input_str, "status": "INFO", "message": f"Please wait, checking SSL cert for '{input_str}'..."})
+                        self.current_result_index = 0
                         self.scroll_pos = 0
                         threading.Thread(target=self.checker_functions['ssl'], args=(input_str, self.result_queue)).start()
                     else: # FILE_INPUT mode
@@ -193,6 +204,7 @@ class GUI:
                                 self.results_list = [{"status": "INFO", "message": f"Processing {len(domains)} domains from '{input_str}'..."}]
                                 self.active_threads = len(domains)
                                 self.scroll_pos = 0
+                                self.current_result_index = None  # No single "current" in batch mode
                                 for domain in domains:
                                     threading.Thread(target=self.checker_functions['ssl'], args=(domain, self.result_queue)).start()
                         except FileNotFoundError:
@@ -214,10 +226,15 @@ class GUI:
                         break # Let the popup handle this
 
                     new_result = self.result_queue.get_nowait()
-                    is_batch_job = self.results_list and self.results_list[0].get("status") == "INFO"
                     if self.active_threads > 0: self.active_threads -= 1
-                    self.results_list = [new_result] if is_batch_job else self.results_list + [new_result]
-                    if is_batch_job: self.scroll_pos = 0
+                    # Batch mode: replace the domainless INFO placeholder on first result
+                    if self.results_list and self.results_list[0].get("status") == "INFO" and not self.results_list[0].get("domain"):
+                        self.results_list = [new_result]
+                        self.scroll_pos = 0
+                    else:
+                        self.results_list.insert(0, new_result)
+                        self.scroll_pos = 0
+                    self.current_result_index = 0
                     redraw_main = True
                 except (queue.Empty, IndexError):
                     break
@@ -232,7 +249,7 @@ class GUI:
         if not (1 <= rel_y < self.output_win.getmaxyx()[0] - 1):
             return # Click was on border or outside
 
-        lines_per_block = 7 if self.detailed_view else 1
+        lines_per_block = 7 if self.detailed_view else 2
         clicked_index = self.scroll_pos + ((rel_y - 1) // lines_per_block)
 
         if 0 <= clicked_index < len(self.results_list):
