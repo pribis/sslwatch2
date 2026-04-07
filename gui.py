@@ -52,9 +52,27 @@ class GUI:
         self.output_win = curses.newwin(h - output_win_y - 2, w - 4, output_win_y, 2)
 
     def _page_size(self):
-        lines_per_block = 7 if self.detailed_view else 2
+        """Viewable rows in the results window (true real estate)."""
         h = self.output_win.getmaxyx()[0]
-        return max(1, (h - 2) // lines_per_block)
+        return max(1, h - 2)
+
+    def _item_heights(self):
+        """Line height of every item in results_list."""
+        block = 7 if self.detailed_view else 2
+        heights = []
+        for r in self.results_list:
+            s = r.get("status", "ERROR")
+            heights.append(1 if s == "INFO" else block)
+        return heights
+
+    def _snap_scroll(self, pos, heights):
+        """Snap pos down to the nearest item-start boundary."""
+        line = 0
+        for h in heights:
+            if line + h > pos:
+                return line
+            line += h
+        return max(0, line - (heights[-1] if heights else 0))
 
     def _draw_scrollbar(self, win, total_items, scroll_pos, page_size):
         h, w = win.getmaxyx()
@@ -83,10 +101,12 @@ class GUI:
             win.noutrefresh()
             return
 
-        lines_per_block = 7 if self.detailed_view else 2
-        page_size = self._page_size()
-        total_pages = max(1, (len(self.results_list) + page_size - 1) // page_size)
-        if self.scroll_pos + page_size >= len(self.results_list):
+        heights = self._item_heights()
+        page_size = self._page_size()          # rows of real estate
+        total_lines = sum(heights)
+
+        total_pages = max(1, (total_lines + page_size - 1) // page_size)
+        if self.scroll_pos + page_size >= total_lines:
             current_page = total_pages
         else:
             current_page = self.scroll_pos // page_size + 1
@@ -97,11 +117,17 @@ class GUI:
         else:
             win.addstr(0, 2, f" Results: {len(self.results_list)} ", title_attr)
 
-        self._draw_scrollbar(win, len(self.results_list), self.scroll_pos, page_size)
+        self._draw_scrollbar(win, total_lines, self.scroll_pos, page_size)
 
-        current_display_line = 1
-        for list_idx, result in enumerate(self.results_list[self.scroll_pos:], start=self.scroll_pos):
-            if current_display_line + lines_per_block > h - 1:
+        display_row = 1
+        line_offset = 0
+        for list_idx, result in enumerate(self.results_list):
+            item_h = heights[list_idx]
+            # Skip items entirely above the viewport
+            if line_offset + item_h <= self.scroll_pos:
+                line_offset += item_h
+                continue
+            if display_row >= h - 1:
                 break
 
             status = result.get("status", "ERROR")
@@ -117,34 +143,33 @@ class GUI:
                 base = curses.A_DIM
 
             if status == "INFO":
-                if current_display_line + 1 > h - 1: break
-                win.addstr(current_display_line, 2, result.get("message", ""), color | base)
-                current_display_line += 1
+                win.addstr(display_row, 2, result.get("message", ""), color | base)
             elif status in ["ERROR", "UNKNOWN"]:
-                if current_display_line + 2 > h - 1: break
-                win.addstr(current_display_line, 2, f"Domain: {result.get('domain', 'N/A')}", color | base)
-                win.addstr(current_display_line + 1, 2, result.get("message", ""), base)
-                current_display_line += 2
+                win.addstr(display_row, 2, f"Domain: {result.get('domain', 'N/A')}", color | base)
+                if display_row + 1 < h - 1:
+                    win.addstr(display_row + 1, 2, result.get("message", ""), base)
             elif self.detailed_view:
-                win.addstr(current_display_line,     2, f"Domain:     {result.get('domain', 'N/A')}", base)
-                win.addstr(current_display_line + 1, 2, f"Subject:    {result.get('subject_cn', 'N/A')}", base)
-                win.addstr(current_display_line + 2, 2, f"Issuer:     {result.get('issuer_cn', 'N/A')}", base)
-                win.addstr(current_display_line + 3, 2, f"Issued:     {result.get('issued_on', 'N/A')}", base)
-                win.addstr(current_display_line + 4, 2, f"Expires:    {result.get('expires_on', 'N/A')} ({result.get('days_left', 'N/A')} days)", base)
-                win.addstr(current_display_line + 5, 2, "Status:     ", base)
-                win.addstr(current_display_line + 5, 14, result.get('status', 'N/A'), color | curses.A_BOLD | base)
-                current_display_line += lines_per_block
+                win.addstr(display_row,     2, f"Domain:     {result.get('domain', 'N/A')}", base)
+                win.addstr(display_row + 1, 2, f"Subject:    {result.get('subject_cn', 'N/A')}", base)
+                win.addstr(display_row + 2, 2, f"Issuer:     {result.get('issuer_cn', 'N/A')}", base)
+                win.addstr(display_row + 3, 2, f"Issued:     {result.get('issued_on', 'N/A')}", base)
+                win.addstr(display_row + 4, 2, f"Expires:    {result.get('expires_on', 'N/A')} ({result.get('days_left', 'N/A')} days)", base)
+                win.addstr(display_row + 5, 2, "Status:     ", base)
+                win.addstr(display_row + 5, 14, result.get('status', 'N/A'), color | curses.A_BOLD | base)
             else:  # Compact view
                 domain_str = result.get('domain', 'N/A')
                 status_str = result.get('status', 'N/A')
                 display_str = f"{domain_str} "
-                win.addstr(current_display_line, 2, display_str, base)
-                win.addstr(current_display_line, 2 + len(display_str), status_str, color | curses.A_BOLD | base)
+                win.addstr(display_row, 2, display_str, base)
+                win.addstr(display_row, 2 + len(display_str), status_str, color | curses.A_BOLD | base)
                 issued  = result.get('issued_on', 'N/A')
                 expires = result.get('expires_on', 'N/A')
                 days    = result.get('days_left', 'N/A')
-                win.addstr(current_display_line + 1, 4, f"Issued: {issued}  Expires: {expires} ({days} days)", base)
-                current_display_line += lines_per_block
+                if display_row + 1 < h - 1:
+                    win.addstr(display_row + 1, 4, f"Issued: {issued}  Expires: {expires} ({days} days)", base)
+
+            line_offset += item_h
+            display_row += item_h
         win.noutrefresh()
 
     def _draw(self, redraw):
@@ -216,37 +241,60 @@ class GUI:
             elif key_pressed == curses.KEY_UP:
                 if self.focus == 'RESULTS' and self.selected_index > 0:
                     self.selected_index -= 1
-                    if self.selected_index < self.scroll_pos:
-                        self.scroll_pos = self.selected_index
+                    heights = self._item_heights()
+                    item_start = sum(heights[:self.selected_index])
+                    if item_start < self.scroll_pos:
+                        self.scroll_pos = item_start
                     redraw = True
             elif key_pressed == curses.KEY_DOWN:
                 if self.focus == 'RESULTS' and self.selected_index < len(self.results_list) - 1:
                     self.selected_index += 1
+                    heights = self._item_heights()
+                    item_start = sum(heights[:self.selected_index])
+                    item_end = item_start + heights[self.selected_index]
                     page_size = self._page_size()
-                    if self.selected_index >= self.scroll_pos + page_size:
-                        self.scroll_pos = self.selected_index - page_size + 1
+                    if item_end > self.scroll_pos + page_size:
+                        self.scroll_pos = self._snap_scroll(item_end - page_size, heights)
                     redraw = True
             elif key_pressed == curses.KEY_LEFT:
-                page_size = self._page_size()
+                heights = self._item_heights()
                 if self.scroll_pos > 0:
-                    self.scroll_pos = max(0, self.scroll_pos - page_size)
+                    self.scroll_pos = self._snap_scroll(max(0, self.scroll_pos - self._page_size()), heights)
                     redraw = True
             elif key_pressed == curses.KEY_RIGHT:
+                heights = self._item_heights()
+                total_lines = sum(heights)
                 page_size = self._page_size()
-                if self.scroll_pos + page_size < len(self.results_list):
-                    self.scroll_pos += page_size
+                if self.scroll_pos + page_size < total_lines:
+                    self.scroll_pos = self._snap_scroll(self.scroll_pos + page_size, heights)
                     redraw = True
             elif key_pressed in [curses.KEY_NPAGE, ord(' ')]:  # Page Down / Space
                 if self.focus == 'RESULTS':
+                    heights = self._item_heights()
+                    total_lines = sum(heights)
                     page_size = self._page_size()
-                    self.scroll_pos = min(max(0, len(self.results_list) - page_size), self.scroll_pos + page_size)
-                    self.selected_index = min(len(self.results_list) - 1, self.scroll_pos)
+                    new_pos = self._snap_scroll(min(max(0, total_lines - page_size), self.scroll_pos + page_size), heights)
+                    self.scroll_pos = new_pos
+                    # move selection to first visible item
+                    line = 0
+                    for i, ih in enumerate(heights):
+                        if line >= self.scroll_pos:
+                            self.selected_index = i
+                            break
+                        line += ih
                     redraw = True
             elif key_pressed in [curses.KEY_PPAGE, 2]:  # Page Up / Ctrl-B
                 if self.focus == 'RESULTS':
+                    heights = self._item_heights()
                     page_size = self._page_size()
-                    self.scroll_pos = max(0, self.scroll_pos - page_size)
-                    self.selected_index = max(0, self.scroll_pos)
+                    new_pos = self._snap_scroll(max(0, self.scroll_pos - page_size), heights)
+                    self.scroll_pos = new_pos
+                    line = 0
+                    for i, ih in enumerate(heights):
+                        if line >= self.scroll_pos:
+                            self.selected_index = i
+                            break
+                        line += ih
                     redraw = True
             elif key_pressed in [curses.KEY_BACKSPACE, 127, 8]:
                 if self.focus == 'INPUT':
@@ -316,10 +364,21 @@ class GUI:
         if not (1 <= rel_y < self.output_win.getmaxyx()[0] - 1):
             return
 
-        lines_per_block = 7 if self.detailed_view else 2
-        clicked_index = self.scroll_pos + ((rel_y - 1) // lines_per_block)
+        heights = self._item_heights()
+        display_row = 1
+        line_offset = 0
+        clicked_index = None
+        for i, item_h in enumerate(heights):
+            if line_offset + item_h <= self.scroll_pos:
+                line_offset += item_h
+                continue
+            if rel_y < display_row + item_h:
+                clicked_index = i
+                break
+            display_row += item_h
+            line_offset += item_h
 
-        if 0 <= clicked_index < len(self.results_list):
+        if clicked_index is not None and 0 <= clicked_index < len(self.results_list):
             self.selected_index = clicked_index
             result = self.results_list[clicked_index]
             domain = result.get('domain')
