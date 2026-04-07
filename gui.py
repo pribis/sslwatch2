@@ -2,6 +2,7 @@ import curses
 import threading
 import queue
 
+
 class GUI:
     def __init__(self, stdscr, checker_functions):
         self.stdscr = stdscr
@@ -15,11 +16,13 @@ class GUI:
         self.active_threads = 0
         self.is_checking = False
         self.scroll_pos = 0
-        self.detailed_view = False # Start with compact view
+        self.detailed_view = False
         self.app_mode = 'DOMAIN_INPUT'
         self.domain_input_str = ""
         self.popup_active = False
-        self.current_result_index = None  # Index of the most recently completed single-domain check
+        self.current_result_index = None
+        self.focus = 'INPUT'       # 'INPUT' or 'RESULTS'
+        self.selected_index = 0    # Highlighted row when focus == 'RESULTS'
 
     def _setup_curses(self):
         curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
@@ -44,9 +47,29 @@ class GUI:
         output_win_y = 9
         self.input_win = curses.newwin(3, 60, input_win_y, input_win_x)
         self.input_win.keypad(True)
-        self.input_win.timeout(100) # Set non-blocking on the window that gets input
-        self.stdscr.timeout(100) # Set a non-blocking timeout on the main screen
+        self.input_win.timeout(100)
+        self.stdscr.timeout(100)
         self.output_win = curses.newwin(h - output_win_y - 2, w - 4, output_win_y, 2)
+
+    def _page_size(self):
+        lines_per_block = 7 if self.detailed_view else 2
+        h = self.output_win.getmaxyx()[0]
+        return max(1, (h - 2) // lines_per_block)
+
+    def _draw_scrollbar(self, win, total_items, scroll_pos, page_size):
+        h, w = win.getmaxyx()
+        track_h = h - 2
+        if total_items <= page_size or track_h <= 0:
+            return
+        thumb_h = max(1, track_h * page_size // total_items)
+        max_scroll = max(1, total_items - page_size)
+        thumb_top = 1 + (track_h - thumb_h) * scroll_pos // max_scroll
+        for row in range(1, 1 + track_h):
+            try:
+                ch = curses.ACS_BLOCK if thumb_top <= row < thumb_top + thumb_h else curses.ACS_VLINE
+                win.addch(row, w - 1, ch)
+            except curses.error:
+                pass
 
     def _draw_output_window(self):
         win = self.output_win
@@ -55,20 +78,23 @@ class GUI:
         h, w = win.getmaxyx()
 
         if not self.results_list:
-            win.addstr(0, 2, " Result ")
+            win.addstr(0, 2, " Results ")
             win.addstr(2, 2, "Enter a domain name above and press Enter.")
             win.noutrefresh()
             return
 
         lines_per_block = 7 if self.detailed_view else 2
-        page_size = max(1, (h - 2) // lines_per_block)
-        total_pages = max(1, (len(self.results_list) + page_size - 1) // page_size) if page_size > 0 else 1
+        page_size = self._page_size()
+        total_pages = max(1, (len(self.results_list) + page_size - 1) // page_size)
         current_page = min(total_pages, (self.scroll_pos // page_size) + 1)
 
-        if len(self.results_list) > 1 and total_pages > 1:
-            win.addstr(0, 2, f" Results: {len(self.results_list)} Page: {current_page}/{total_pages} ")
+        title_attr = curses.A_BOLD if self.focus == 'RESULTS' else curses.A_NORMAL
+        if total_pages > 1:
+            win.addstr(0, 2, f" Results: {len(self.results_list)} Page: {current_page}/{total_pages} ", title_attr)
         else:
-            win.addstr(0, 2, f" Results: {len(self.results_list)} ")
+            win.addstr(0, 2, f" Results: {len(self.results_list)} ", title_attr)
+
+        self._draw_scrollbar(win, len(self.results_list), self.scroll_pos, page_size)
 
         current_display_line = 1
         for list_idx, result in enumerate(self.results_list[self.scroll_pos:], start=self.scroll_pos):
@@ -78,36 +104,43 @@ class GUI:
             status = result.get("status", "ERROR")
             color = self.colors.get(status, curses.color_pair(0))
             is_current = self.current_result_index is None or list_idx == self.current_result_index
-            dim = curses.A_NORMAL if is_current else curses.A_DIM
+            is_selected = self.focus == 'RESULTS' and list_idx == self.selected_index
+
+            if is_selected:
+                base = curses.A_REVERSE
+            elif is_current:
+                base = curses.A_NORMAL
+            else:
+                base = curses.A_DIM
 
             if status == "INFO":
                 if current_display_line + 1 > h - 1: break
-                win.addstr(current_display_line, 2, result.get("message", ""), color | dim)
+                win.addstr(current_display_line, 2, result.get("message", ""), color | base)
                 current_display_line += 1
             elif status in ["ERROR", "UNKNOWN"]:
                 if current_display_line + 2 > h - 1: break
-                win.addstr(current_display_line, 2, f"Domain: {result.get('domain', 'N/A')}", color | dim)
-                win.addstr(current_display_line + 1, 2, result.get("message", ""), dim)
+                win.addstr(current_display_line, 2, f"Domain: {result.get('domain', 'N/A')}", color | base)
+                win.addstr(current_display_line + 1, 2, result.get("message", ""), base)
                 current_display_line += 2
             elif self.detailed_view:
-                win.addstr(current_display_line, 2, f"Domain:     {result.get('domain', 'N/A')}", dim)
-                win.addstr(current_display_line + 1, 2, f"Subject:    {result.get('subject_cn', 'N/A')}", dim)
-                win.addstr(current_display_line + 2, 2, f"Issuer:     {result.get('issuer_cn', 'N/A')}", dim)
-                win.addstr(current_display_line + 3, 2, f"Issued:     {result.get('issued_on', 'N/A')}", dim)
-                win.addstr(current_display_line + 4, 2, f"Expires:    {result.get('expires_on', 'N/A')} ({result.get('days_left', 'N/A')} days)", dim)
-                win.addstr(current_display_line + 5, 2, "Status:     ", dim)
-                win.addstr(current_display_line + 5, 14, result.get('status', 'N/A'), color | curses.A_BOLD | dim)
+                win.addstr(current_display_line,     2, f"Domain:     {result.get('domain', 'N/A')}", base)
+                win.addstr(current_display_line + 1, 2, f"Subject:    {result.get('subject_cn', 'N/A')}", base)
+                win.addstr(current_display_line + 2, 2, f"Issuer:     {result.get('issuer_cn', 'N/A')}", base)
+                win.addstr(current_display_line + 3, 2, f"Issued:     {result.get('issued_on', 'N/A')}", base)
+                win.addstr(current_display_line + 4, 2, f"Expires:    {result.get('expires_on', 'N/A')} ({result.get('days_left', 'N/A')} days)", base)
+                win.addstr(current_display_line + 5, 2, "Status:     ", base)
+                win.addstr(current_display_line + 5, 14, result.get('status', 'N/A'), color | curses.A_BOLD | base)
                 current_display_line += lines_per_block
-            else: # Compact view
+            else:  # Compact view
                 domain_str = result.get('domain', 'N/A')
                 status_str = result.get('status', 'N/A')
                 display_str = f"{domain_str} "
-                win.addstr(current_display_line, 2, display_str, dim)
-                win.addstr(current_display_line, 2 + len(display_str), status_str, color | curses.A_BOLD | dim)
-                issued = result.get('issued_on', 'N/A')
+                win.addstr(current_display_line, 2, display_str, base)
+                win.addstr(current_display_line, 2 + len(display_str), status_str, color | curses.A_BOLD | base)
+                issued  = result.get('issued_on', 'N/A')
                 expires = result.get('expires_on', 'N/A')
-                days = result.get('days_left', 'N/A')
-                win.addstr(current_display_line + 1, 4, f"Issued: {issued}  Expires: {expires} ({days} days)", dim)
+                days    = result.get('days_left', 'N/A')
+                win.addstr(current_display_line + 1, 4, f"Issued: {issued}  Expires: {expires} ({days} days)", base)
                 current_display_line += lines_per_block
         win.noutrefresh()
 
@@ -118,84 +151,108 @@ class GUI:
         self.stdscr.addstr(1, (w - 27) // 2, "SSL Certificate Checker", curses.A_BOLD | curses.A_UNDERLINE)
         prompt = "Enter domain name:" if self.app_mode == 'DOMAIN_INPUT' else "Enter file path:"
         self.stdscr.addstr(3, (w - len(prompt)) // 2, prompt)
-        help_text = "Ctrl-X: Help  |  Ctrl-C: Quit"
-        self.stdscr.addstr(h - 2, 2, help_text)
+        self.stdscr.addstr(h - 2, 2, "Tab: Switch focus  |  Ctrl-X: Help  |  Ctrl-C: Quit")
         self.stdscr.noutrefresh()
 
         self.input_win.erase()
         self.input_win.box()
         label_text = " Domain Input " if self.app_mode == 'DOMAIN_INPUT' else " Import Domains "
-        self.input_win.addstr(0, 2, f" {label_text} ")
+        input_title_attr = curses.A_BOLD if self.focus == 'INPUT' else curses.A_NORMAL
+        self.input_win.addstr(0, 2, f" {label_text} ", input_title_attr)
         self.input_win.addstr(1, 2, self.domain_input_str)
         self.input_win.noutrefresh()
 
         self._draw_output_window()
-        self.input_win.move(1, 2 + len(self.domain_input_str))
-        return False # Reset redraw flag
+
+        if self.focus == 'RESULTS':
+            curses.curs_set(0)
+        else:
+            curses.curs_set(1)
+            self.input_win.move(1, 2 + len(self.domain_input_str))
+        return False
 
     def run(self):
         redraw = True
         while True:
-            # First, draw the screen if a redraw is needed.
             redraw = self._draw(redraw)
-            curses.doupdate() # Perform all staged refreshes
+            curses.doupdate()
 
-            # Now, wait for input. This is the only blocking call in the main loop.
             try:
-                # Get input from the window that has the cursor
                 key_pressed = self.input_win.getch()
             except curses.error:
                 key_pressed = -1
 
-            # Process input
             if key_pressed == -1:
-                pass # Timeout, do nothing
+                pass
             elif key_pressed == curses.KEY_MOUSE:
                 try:
                     _, mx, my, _, _ = curses.getmouse()
                     if self.output_win.enclose(my, mx):
                         self._handle_mouse_click(my, mx)
                 except curses.error:
-                    pass # Ignore mouse errors
+                    pass
                 redraw = True
-            elif key_pressed == 6: # Ctrl-F
+            elif key_pressed == 9:  # Tab — switch focus
+                self.focus = 'RESULTS' if self.focus == 'INPUT' else 'INPUT'
+                redraw = True
+            elif key_pressed in [ord('u'), ord('U')]:
+                if self.focus == 'RESULTS':
+                    self.focus = 'INPUT'
+                    redraw = True
+            elif key_pressed == 6:  # Ctrl-F
                 self.app_mode = 'FILE_INPUT' if self.app_mode == 'DOMAIN_INPUT' else 'DOMAIN_INPUT'
                 self.domain_input_str = ""
                 redraw = True
-            elif key_pressed == 4: # Ctrl-D
+            elif key_pressed == 4:  # Ctrl-D
                 self.detailed_view = not self.detailed_view
                 self.scroll_pos = 0
                 redraw = True
-            elif key_pressed == 24: # Ctrl-X
-                # This must be the last action for this key.
-                # It will block until the popup is closed.
+            elif key_pressed == 24:  # Ctrl-X
                 self._display_help_popup()
-                redraw = True # Redraw main screen after popup closes
+                redraw = True
+            elif key_pressed == curses.KEY_UP:
+                if self.focus == 'RESULTS' and self.selected_index > 0:
+                    self.selected_index -= 1
+                    if self.selected_index < self.scroll_pos:
+                        self.scroll_pos = self.selected_index
+                    redraw = True
+            elif key_pressed == curses.KEY_DOWN:
+                if self.focus == 'RESULTS' and self.selected_index < len(self.results_list) - 1:
+                    self.selected_index += 1
+                    page_size = self._page_size()
+                    if self.selected_index >= self.scroll_pos + page_size:
+                        self.scroll_pos = self.selected_index - page_size + 1
+                    redraw = True
             elif key_pressed == curses.KEY_LEFT:
-                lines_per_block = 7 if self.detailed_view else 2
-                page_size = max(1, (self.output_win.getmaxyx()[0] - 2) // lines_per_block)
+                page_size = self._page_size()
                 if self.scroll_pos > 0:
                     self.scroll_pos = max(0, self.scroll_pos - page_size)
                     redraw = True
             elif key_pressed == curses.KEY_RIGHT:
-                lines_per_block = 7 if self.detailed_view else 2
-                page_size = max(1, (self.output_win.getmaxyx()[0] - 2) // lines_per_block)
+                page_size = self._page_size()
                 if self.scroll_pos + page_size < len(self.results_list):
                     self.scroll_pos += page_size
                     redraw = True
             elif key_pressed in [curses.KEY_BACKSPACE, 127, 8]:
-                self.domain_input_str = self.domain_input_str[:-1]
-                redraw = True
+                if self.focus == 'INPUT':
+                    self.domain_input_str = self.domain_input_str[:-1]
+                    redraw = True
             elif key_pressed in [10, 13, curses.KEY_ENTER]:
-                if not self.is_checking and self.domain_input_str.strip():
+                if self.focus == 'RESULTS':
+                    if 0 <= self.selected_index < len(self.results_list):
+                        result = self.results_list[self.selected_index]
+                        domain = result.get('domain')
+                        if domain and result.get('status') not in ['INFO', 'ERROR', 'UNKNOWN']:
+                            threading.Thread(target=self.checker_functions['whois'], args=(domain, self.result_queue)).start()
+                            self._display_whois_popup(domain)
+                            redraw = True
+                elif not self.is_checking and self.domain_input_str.strip():
                     input_str = self.domain_input_str.strip()
                     if self.app_mode == 'DOMAIN_INPUT':
                         self.is_checking = True
-                        self.results_list.insert(0, {"domain": input_str, "status": "INFO", "message": f"Please wait, checking SSL cert for '{input_str}'..."})
-                        self.current_result_index = 0
                         self.scroll_pos = 0
                         threading.Thread(target=self.checker_functions['ssl'], args=(input_str, self.result_queue)).start()
-                    else: # FILE_INPUT mode
+                    else:  # FILE_INPUT mode
                         try:
                             with open(input_str, 'r') as f:
                                 domains = [line.strip() for line in f if line.strip()]
@@ -204,7 +261,8 @@ class GUI:
                                 self.results_list = [{"status": "INFO", "message": f"Processing {len(domains)} domains from '{input_str}'..."}]
                                 self.active_threads = len(domains)
                                 self.scroll_pos = 0
-                                self.current_result_index = None  # No single "current" in batch mode
+                                self.selected_index = 0
+                                self.current_result_index = None
                                 for domain in domains:
                                     threading.Thread(target=self.checker_functions['ssl'], args=(domain, self.result_queue)).start()
                         except FileNotFoundError:
@@ -213,27 +271,26 @@ class GUI:
                     self.domain_input_str = ""
                     redraw = True
             elif 32 <= key_pressed <= 126:
-                self.domain_input_str += chr(key_pressed)
-                redraw = True
+                if self.focus == 'INPUT':
+                    self.domain_input_str += chr(key_pressed)
+                    redraw = True
 
             # Process results from the queue
             redraw_main = False
             while not self.result_queue.empty():
                 try:
-                    # Peek at the result without removing it
                     result = self.result_queue.queue[0]
                     if str(result.get("status", "")).startswith("WHOIS"):
-                        break # Let the popup handle this
+                        break
 
                     new_result = self.result_queue.get_nowait()
                     if self.active_threads > 0: self.active_threads -= 1
-                    # Batch mode: replace the domainless INFO placeholder on first result
                     if self.results_list and self.results_list[0].get("status") == "INFO" and not self.results_list[0].get("domain"):
                         self.results_list = [new_result]
-                        self.scroll_pos = 0
                     else:
                         self.results_list.insert(0, new_result)
-                        self.scroll_pos = 0
+                    self.scroll_pos = 0
+                    self.selected_index = 0
                     self.current_result_index = 0
                     redraw_main = True
                 except (queue.Empty, IndexError):
@@ -242,17 +299,17 @@ class GUI:
             if redraw_main: redraw = True
 
     def _handle_mouse_click(self, y, x):
-        # Curses y,x are relative to screen, need to convert to window-relative
         win_y, win_x = self.output_win.getbegyx()
         rel_y = y - win_y
 
         if not (1 <= rel_y < self.output_win.getmaxyx()[0] - 1):
-            return # Click was on border or outside
+            return
 
         lines_per_block = 7 if self.detailed_view else 2
         clicked_index = self.scroll_pos + ((rel_y - 1) // lines_per_block)
 
         if 0 <= clicked_index < len(self.results_list):
+            self.selected_index = clicked_index
             result = self.results_list[clicked_index]
             domain = result.get('domain')
             if domain and result.get('status') not in ['INFO', 'ERROR', 'UNKNOWN']:
@@ -272,25 +329,22 @@ class GUI:
 
         self.popup_active = True
         while True:
-            # --- Draw Popup ---
             popup_win.erase()
             popup_win.box()
-            popup_win.addstr(0, 2, f" Whois: {domain} (Q to close) ")
-            popup_win.addstr(0, popup_w - 2, 'x', curses.A_BOLD) # Add close button
+            popup_win.addstr(0, 2, f" Whois: {domain} (Esc to close) ")
+            popup_win.addstr(0, popup_w - 2, 'x', curses.A_BOLD)
 
             if whois_data is None:
                 popup_win.addstr(2, 2, "Fetching whois data, please wait...")
             else:
                 data = whois_data.get("data", "No data available.")
                 lines = data.split('\n')
-                max_lines = popup_h - 2
                 for i, line in enumerate(lines[scroll_pos:]):
-                    if i >= max_lines: break
-                    popup_win.addstr(i + 1, 2, line[:popup_w-3])
+                    if i >= popup_h - 2: break
+                    popup_win.addstr(i + 1, 2, line[:popup_w - 3])
 
             popup_win.refresh()
 
-            # --- Check for whois result ---
             if whois_data is None:
                 try:
                     result = self.result_queue.get_nowait()
@@ -299,7 +353,6 @@ class GUI:
                 except queue.Empty:
                     pass
 
-            # --- Handle Input ---
             try:
                 key = popup_win.getch()
             except curses.error:
@@ -307,27 +360,21 @@ class GUI:
 
             if key == curses.KEY_MOUSE:
                 try:
-                    _, mx, my, _, bstate = curses.getmouse() # bstate is a bitmask
-
-                    # Check for close button click
+                    _, mx, my, _, bstate = curses.getmouse()
                     rel_y, rel_x = my - popup_y, mx - popup_x
                     is_left_click = (hasattr(curses, 'BUTTON1_PRESSED') and bstate & curses.BUTTON1_PRESSED) or \
                                     (hasattr(curses, 'BUTTON1_CLICKED') and bstate & curses.BUTTON1_CLICKED)
-
                     if is_left_click and rel_y == 0 and rel_x == popup_w - 2:
-                        break # Close the popup
-
-                    # Check for scroll wheel up (BUTTON4_PRESSED)
+                        break
                     elif hasattr(curses, 'BUTTON4_PRESSED') and bstate & curses.BUTTON4_PRESSED:
-                        scroll_pos = max(0, scroll_pos - 3) # Scroll by 3 lines for a better feel
-                    # Check for scroll wheel down (BUTTON5_PRESSED)
+                        scroll_pos = max(0, scroll_pos - 3)
                     elif hasattr(curses, 'BUTTON5_PRESSED') and bstate & curses.BUTTON5_PRESSED:
                         if whois_data and whois_data.get('data'):
                             max_scroll = len(whois_data['data'].split('\n')) - (popup_h - 2)
                             scroll_pos = min(max(0, max_scroll), scroll_pos + 3)
                 except curses.error:
-                    pass # Ignore mouse errors
-            elif key in [ord('q'), ord('Q')]:
+                    pass
+            elif key in [27]:  # Esc
                 break
             elif key == curses.KEY_UP:
                 scroll_pos = max(0, scroll_pos - 1)
@@ -336,18 +383,17 @@ class GUI:
                     max_scroll = len(whois_data['data'].split('\n')) - (popup_h - 2)
                     scroll_pos = min(max(0, max_scroll), scroll_pos + 1)
 
-        # Cleanup
         del popup_win
         self.stdscr.touchwin()
         self.stdscr.refresh()
 
     def _display_help_popup(self):
         h, w = self.stdscr.getmaxyx()
-        popup_h, popup_w = 15, 80
+        popup_h, popup_w = 18, 80
         popup_y, popup_x = (h - popup_h) // 2, (w - popup_w) // 2
         popup_win = curses.newwin(popup_h, popup_w, popup_y, popup_x)
         popup_win.keypad(True)
-        popup_win.timeout(100) # Use a non-blocking getch, essential for the loop
+        popup_win.timeout(100)
 
         help_lines = [
             ("General", ""),
@@ -356,20 +402,22 @@ class GUI:
             ("  Ctrl-C", "Quit the application."),
             ("", ""),
             ("Navigation", ""),
+            ("  Tab", "Switch focus between input box and results."),
+            ("  U", "Return cursor to domain input (when results focused)."),
             ("  Ctrl-D", "Toggle between compact and detailed results view."),
+            ("  ↑ / ↓", "Move selection in results (when results focused)."),
             ("  ← / →", "Page through results list."),
+            ("  Enter", "View WHOIS for selected domain (when results focused)."),
             ("  Mouse Click", "On a domain to view its WHOIS information."),
             ("  Ctrl-X", "Display this help screen."),
             ("Popups (WHOIS/Help)", ""),
-            ("  Q / Esc", "Close the active popup window."),
+            ("  Esc", "Close the active popup window."),
             ("  ↑ / ↓", "Scroll content within a popup."),
         ]
 
-        # Flush any lingering input before waiting for a new key press
         curses.flushinp()
 
         self.popup_active = True
-        # This loop structure is essential for the popup to control the screen
         while True:
             popup_win.erase()
             popup_win.box()
@@ -383,12 +431,10 @@ class GUI:
 
             popup_win.refresh()
 
-            # Wait for a specific key to close, ignoring the initial Ctrl-H.
             key = popup_win.getch()
-            if key != -1: # Break on any key press
+            if key != -1:
                 break
 
-        # Cleanup
         del popup_win
         self.stdscr.touchwin()
         self.stdscr.refresh()
