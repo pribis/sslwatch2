@@ -233,6 +233,18 @@ class GUI:
                 if self.scroll_pos + page_size < len(self.results_list):
                     self.scroll_pos += page_size
                     redraw = True
+            elif key_pressed in [curses.KEY_NPAGE, ord(' ')]:  # Page Down / Space
+                if self.focus == 'RESULTS':
+                    page_size = self._page_size()
+                    self.scroll_pos = min(max(0, len(self.results_list) - page_size), self.scroll_pos + page_size)
+                    self.selected_index = min(len(self.results_list) - 1, self.scroll_pos)
+                    redraw = True
+            elif key_pressed in [curses.KEY_PPAGE, 2]:  # Page Up / Ctrl-B
+                if self.focus == 'RESULTS':
+                    page_size = self._page_size()
+                    self.scroll_pos = max(0, self.scroll_pos - page_size)
+                    self.selected_index = max(0, self.scroll_pos)
+                    redraw = True
             elif key_pressed in [curses.KEY_BACKSPACE, 127, 8]:
                 if self.focus == 'INPUT':
                     self.domain_input_str = self.domain_input_str[:-1]
@@ -392,7 +404,7 @@ class GUI:
 
     def _display_help_popup(self):
         h, w = self.stdscr.getmaxyx()
-        popup_h, popup_w = 20, 80
+        popup_h, popup_w = 22, 80
         popup_y, popup_x = (h - popup_h) // 2, (w - popup_w) // 2
         popup_win = curses.newwin(popup_h, popup_w, popup_y, popup_x)
         popup_win.keypad(True)
@@ -409,6 +421,8 @@ class GUI:
             ("  Ctrl-U", "Return cursor to domain input (when results focused)."),
             ("  Ctrl-D", "Toggle between compact and detailed results view."),
             ("  ↑ / ↓", "Move selection in results (when results focused)."),
+            ("  PgDn / Space", "Page down in results (when results focused)."),
+            ("  PgUp / Ctrl-B", "Page up in results (when results focused)."),
             ("  ← / →", "Page through results list."),
             ("  Enter", "View WHOIS for selected domain (when results focused)."),
             ("  Mouse Click", "On a domain to view its WHOIS information."),
