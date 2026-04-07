@@ -382,6 +382,13 @@ class GUI:
                 if whois_data and whois_data.get('data'):
                     max_scroll = len(whois_data['data'].split('\n')) - (popup_h - 2)
                     scroll_pos = min(max(0, max_scroll), scroll_pos + 1)
+            elif key in [curses.KEY_NPAGE, ord(' ')]:  # Page Down / Space
+                if whois_data and whois_data.get('data'):
+                    page = popup_h - 2
+                    max_scroll = len(whois_data['data'].split('\n')) - page
+                    scroll_pos = min(max(0, max_scroll), scroll_pos + page)
+            elif key in [curses.KEY_PPAGE, 2]:  # Page Up / Ctrl-B
+                scroll_pos = max(0, scroll_pos - (popup_h - 2))
 
         del popup_win
         self.stdscr.touchwin()
@@ -389,7 +396,7 @@ class GUI:
 
     def _display_help_popup(self):
         h, w = self.stdscr.getmaxyx()
-        popup_h, popup_w = 18, 80
+        popup_h, popup_w = 20, 80
         popup_y, popup_x = (h - popup_h) // 2, (w - popup_w) // 2
         popup_win = curses.newwin(popup_h, popup_w, popup_y, popup_x)
         popup_win.keypad(True)
@@ -412,7 +419,9 @@ class GUI:
             ("  ?", "Display this help screen."),
             ("Popups (WHOIS/Help)", ""),
             ("  Esc", "Close the active popup window."),
-            ("  ↑ / ↓", "Scroll content within a popup."),
+            ("  ↑ / ↓", "Scroll one line up/down."),
+            ("  PgDn / Space", "Page down."),
+            ("  PgUp / Ctrl-B", "Page up."),
         ]
 
         curses.flushinp()
