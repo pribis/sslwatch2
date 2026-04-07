@@ -238,6 +238,12 @@ class GUI:
             elif key_pressed == ord('?'):  # ? — help
                 self._display_help_popup()
                 redraw = True
+            elif key_pressed == 12:  # Ctrl-L — clear results
+                self.results_list = []
+                self.scroll_pos = 0
+                self.selected_index = 0
+                self.current_result_index = None
+                redraw = True
             elif key_pressed == curses.KEY_UP:
                 if self.focus == 'RESULTS' and self.selected_index > 0:
                     self.selected_index -= 1
@@ -466,7 +472,7 @@ class GUI:
 
     def _display_help_popup(self):
         h, w = self.stdscr.getmaxyx()
-        popup_h, popup_w = 22, 80
+        popup_h, popup_w = 23, 80
         popup_y, popup_x = (h - popup_h) // 2, (w - popup_w) // 2
         popup_win = curses.newwin(popup_h, popup_w, popup_y, popup_x)
         popup_win.keypad(True)
@@ -488,6 +494,7 @@ class GUI:
             ("  ← / →", "Page through results list."),
             ("  Enter", "View WHOIS for selected domain (when results focused)."),
             ("  Mouse Click", "On a domain to view its WHOIS information."),
+            ("  Ctrl-L", "Clear all results."),
             ("  ?", "Display this help screen."),
             ("Popups (WHOIS/Help)", ""),
             ("  Esc", "Close the active popup window."),
