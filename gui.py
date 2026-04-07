@@ -258,7 +258,6 @@ class GUI:
                                 domains = [line.strip() for line in f if line.strip()]
                             if domains:
                                 self.is_checking = True
-                                self.results_list = [{"status": "INFO", "message": f"Processing {len(domains)} domains from '{input_str}'..."}]
                                 self.active_threads = len(domains)
                                 self.scroll_pos = 0
                                 self.selected_index = 0
@@ -266,7 +265,7 @@ class GUI:
                                 for domain in domains:
                                     threading.Thread(target=self.checker_functions['ssl'], args=(domain, self.result_queue)).start()
                         except FileNotFoundError:
-                            self.results_list = [{"status": "ERROR", "message": f"File not found: '{input_str}'"}]
+                            self.results_list.insert(0, {"status": "ERROR", "message": f"File not found: '{input_str}'"})
                         self.app_mode = 'DOMAIN_INPUT'
                     self.domain_input_str = ""
                     redraw = True
@@ -285,10 +284,7 @@ class GUI:
 
                     new_result = self.result_queue.get_nowait()
                     if self.active_threads > 0: self.active_threads -= 1
-                    if self.results_list and self.results_list[0].get("status") == "INFO" and not self.results_list[0].get("domain"):
-                        self.results_list = [new_result]
-                    else:
-                        self.results_list.insert(0, new_result)
+                    self.results_list.insert(0, new_result)
                     self.scroll_pos = 0
                     self.selected_index = 0
                     self.current_result_index = 0
