@@ -151,7 +151,7 @@ class GUI:
         self.stdscr.addstr(1, (w - 27) // 2, "SSL Certificate Checker", curses.A_BOLD | curses.A_UNDERLINE)
         prompt = "Enter domain name:" if self.app_mode == 'DOMAIN_INPUT' else "Enter file path:"
         self.stdscr.addstr(3, (w - len(prompt)) // 2, prompt)
-        self.stdscr.addstr(h - 2, 2, "Tab: Switch focus  |  Ctrl-X: Help  |  Ctrl-C: Quit")
+        self.stdscr.addstr(h - 2, 2, "Tab: Switch focus  |  ?: Help  |  Ctrl-C: Quit")
         self.stdscr.noutrefresh()
 
         self.input_win.erase()
@@ -195,7 +195,7 @@ class GUI:
             elif key_pressed == 9:  # Tab — switch focus
                 self.focus = 'RESULTS' if self.focus == 'INPUT' else 'INPUT'
                 redraw = True
-            elif key_pressed in [ord('u'), ord('U')]:
+            elif key_pressed == 21:  # Ctrl-U — return to input
                 if self.focus == 'RESULTS':
                     self.focus = 'INPUT'
                     redraw = True
@@ -207,7 +207,7 @@ class GUI:
                 self.detailed_view = not self.detailed_view
                 self.scroll_pos = 0
                 redraw = True
-            elif key_pressed == 24:  # Ctrl-X
+            elif key_pressed == ord('?'):  # ? — help
                 self._display_help_popup()
                 redraw = True
             elif key_pressed == curses.KEY_UP:
@@ -403,13 +403,13 @@ class GUI:
             ("", ""),
             ("Navigation", ""),
             ("  Tab", "Switch focus between input box and results."),
-            ("  U", "Return cursor to domain input (when results focused)."),
+            ("  Ctrl-U", "Return cursor to domain input (when results focused)."),
             ("  Ctrl-D", "Toggle between compact and detailed results view."),
             ("  ↑ / ↓", "Move selection in results (when results focused)."),
             ("  ← / →", "Page through results list."),
             ("  Enter", "View WHOIS for selected domain (when results focused)."),
             ("  Mouse Click", "On a domain to view its WHOIS information."),
-            ("  Ctrl-X", "Display this help screen."),
+            ("  ?", "Display this help screen."),
             ("Popups (WHOIS/Help)", ""),
             ("  Esc", "Close the active popup window."),
             ("  ↑ / ↓", "Scroll content within a popup."),
